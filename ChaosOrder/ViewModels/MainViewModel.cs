@@ -18,8 +18,9 @@ namespace ChaosOrder.ViewModels
         private const double Radius = 260;
 
         public ObservableCollection<ObservablePoint> Corners { get; } = new();
-        public ObservablePoint StartPoint { get; } = new(CanvasSize / 2, CanvasSize - 60);
+        public ObservablePoint StartPoint { get; } = new(Center.X, Center.Y);
         public ObservableCollection<DirectionRule> Rules { get; } = new();
+        public ObservableCollection<ConfigurationEntry> SavedConfigurations { get; } = new();
 
         public Array FigureTypeValues { get; } = Enum.GetValues(typeof(FigureType));
         public Array TargetTypeValues { get; } = Enum.GetValues(typeof(DirectionTargetType));
@@ -91,6 +92,13 @@ namespace ChaosOrder.ViewModels
             set => SetField(ref _isBusy, value);
         }
 
+        private ConfigurationEntry? _selectedConfiguration;
+        public ConfigurationEntry? SelectedConfiguration
+        {
+            get => _selectedConfiguration;
+            set => SetField(ref _selectedConfiguration, value);
+        }
+
         public WriteableBitmap SimulationBitmap { get; } =
             new((int)CanvasSize, (int)CanvasSize, 96, 96, PixelFormats.Pbgra32, null);
 
@@ -103,6 +111,11 @@ namespace ChaosOrder.ViewModels
         public ICommand RemoveRuleCommand { get; }
         public ICommand SaveConfigurationCommand { get; }
         public ICommand LoadConfigurationCommand { get; }
+        public ICommand LoadSelectedConfigurationCommand { get; }
+
+        // Raised when the drawing canvas's zoom should snap back to 1x (e.g. after Make Regular).
+        // The zoom transform is a view concern, so the view subscribes and resets it itself.
+        public event EventHandler? ZoomResetRequested;
 
         public MainViewModel()
         {
@@ -116,7 +129,8 @@ namespace ChaosOrder.ViewModels
             AddRuleCommand = new RelayCommand(_ => Rules.Add(new DirectionRule()));
             RemoveRuleCommand = new RelayCommand(p => { if (p is DirectionRule r) Rules.Remove(r); });
             SaveConfigurationCommand = new RelayCommand(_ => SaveConfiguration());
-            LoadConfigurationCommand = new RelayCommand(_ => LoadConfiguration());
+            LoadConfigurationCommand = new RelayCommand(_ => LoadConfigurationFromFile());
+            LoadSelectedConfigurationCommand = new RelayCommand(async _ => await LoadSelectedConfigurationAsync(), _ => SelectedConfiguration != null);
 
             Corners.CollectionChanged += Corners_CollectionChanged;
             RegenerateFigure();
@@ -124,6 +138,7 @@ namespace ChaosOrder.ViewModels
             Rules.Add(new DirectionRule { TargetType = DirectionTargetType.Corners, Step = "1/2", Weight = 1 });
 
             ClearBitmap();
+            LoadConfigurationsFromDisk();
         }
 
         private void Corners_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -204,38 +219,67 @@ namespace ChaosOrder.ViewModels
 
         private static readonly JsonSerializerOptions ConfigJsonOptions = new() { WriteIndented = true };
 
+        // All saved configurations live in one file, configurations.json, next to the .csproj
+        // so it is part of the project and gets checked into source control. Falls back to
+        // the user's per-user app-data folder if the project source tree can't be found
+        // (e.g. running a published build outside the repo).
+        private static readonly string ConfigStorePath = ResolveConfigStorePath();
+
+        private static string ResolveConfigStorePath()
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null && dir.GetFiles("*.csproj").Length == 0)
+                dir = dir.Parent;
+
+            string root = dir?.FullName
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ChaosOrder");
+            return Path.Combine(root, "configurations.json");
+        }
+
+        private ChaosConfiguration BuildConfigurationSnapshot() => new()
+        {
+            FigureType = SelectedFigureType.ToString(),
+            Corners = Corners.Select(c => new PointDto { X = c.X, Y = c.Y }).ToList(),
+            StartPoint = new PointDto { X = StartPoint.X, Y = StartPoint.Y },
+            NumberOfSimulations = NumberOfSimulations,
+            ColorName = SelectedColor.Name,
+            Thickness = Thickness,
+            Rules = Rules.Select(r => new RuleDto
+            {
+                IsEnabled = r.IsEnabled,
+                TargetType = r.TargetType.ToString(),
+                N = r.N,
+                Step = r.Step,
+                Weight = r.Weight
+            }).ToList()
+        };
+
+        // Short label like "5pt_1/2,2/3_2026-08-18": corner count, the distinct steps of
+        // the enabled rules, and today's date.
+        private string GenerateShortName()
+        {
+            var steps = Rules.Where(r => r.IsEnabled)
+                              .Select(r => string.IsNullOrWhiteSpace(r.Step) ? "?" : r.Step.Trim())
+                              .Distinct();
+            string stepsPart = steps.Any() ? string.Join(",", steps) : "none";
+            return $"{Corners.Count}pt_{stepsPart}_{DateTime.Now:yyyy-MM-dd}";
+        }
+
         private void SaveConfiguration()
         {
-            var dlg = new Microsoft.Win32.SaveFileDialog
-            {
-                Filter = "Chaos configuration (*.chaos.json)|*.chaos.json|All files (*.*)|*.*",
-                DefaultExt = ".chaos.json",
-                FileName = "chaos-config.chaos.json"
-            };
-            if (dlg.ShowDialog() != true) return;
-
             try
             {
-                var dto = new ChaosConfiguration
+                var entry = new ConfigurationEntry
                 {
-                    FigureType = SelectedFigureType.ToString(),
-                    Corners = Corners.Select(c => new PointDto { X = c.X, Y = c.Y }).ToList(),
-                    StartPoint = new PointDto { X = StartPoint.X, Y = StartPoint.Y },
-                    NumberOfSimulations = NumberOfSimulations,
-                    ColorName = SelectedColor.Name,
-                    Thickness = Thickness,
-                    Rules = Rules.Select(r => new RuleDto
-                    {
-                        IsEnabled = r.IsEnabled,
-                        TargetType = r.TargetType.ToString(),
-                        N = r.N,
-                        Step = r.Step,
-                        Weight = r.Weight
-                    }).ToList()
+                    Name = GenerateShortName(),
+                    SavedAt = DateTime.Now,
+                    Config = BuildConfigurationSnapshot()
                 };
 
-                File.WriteAllText(dlg.FileName, JsonSerializer.Serialize(dto, ConfigJsonOptions));
-                StatusText = $"Saved configuration to {Path.GetFileName(dlg.FileName)}.";
+                SavedConfigurations.Insert(0, entry);
+                PersistConfigurations();
+                SelectedConfiguration = entry;
+                StatusText = $"Saved configuration \"{entry.Name}\".";
             }
             catch (Exception ex)
             {
@@ -243,7 +287,46 @@ namespace ChaosOrder.ViewModels
             }
         }
 
-        private void LoadConfiguration()
+        private void PersistConfigurations()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ConfigStorePath)!);
+            var json = JsonSerializer.Serialize(SavedConfigurations.ToList(), ConfigJsonOptions);
+            File.WriteAllText(ConfigStorePath, json);
+        }
+
+        private void LoadConfigurationsFromDisk()
+        {
+            try
+            {
+                if (!File.Exists(ConfigStorePath)) return;
+                var list = JsonSerializer.Deserialize<List<ConfigurationEntry>>(File.ReadAllText(ConfigStorePath), ConfigJsonOptions);
+                if (list == null) return;
+
+                SavedConfigurations.Clear();
+                foreach (var entry in list)
+                    SavedConfigurations.Add(entry);
+            }
+            catch
+            {
+                // Corrupt or unreadable store file: start with an empty list rather than fail startup.
+            }
+        }
+
+        private async Task LoadSelectedConfigurationAsync()
+        {
+            if (SelectedConfiguration == null)
+            {
+                StatusText = "Select a saved configuration first.";
+                return;
+            }
+
+            if (ApplyConfiguration(SelectedConfiguration.Config))
+                StatusText = $"Loaded \"{SelectedConfiguration.Name}\".";
+
+            await RunSimulationAsync();
+        }
+
+        private void LoadConfigurationFromFile()
         {
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
@@ -259,45 +342,52 @@ namespace ChaosOrder.ViewModels
                     StatusText = "Load failed: file is empty or invalid.";
                     return;
                 }
-                if (dto.Corners.Count < 3)
-                {
-                    StatusText = "Load failed: configuration has fewer than 3 corners.";
-                    return;
-                }
 
-                SetFigureTypeSilently(Enum.TryParse<FigureType>(dto.FigureType, out var ft) ? ft : FigureType.Custom);
-
-                Corners.Clear();
-                foreach (var p in dto.Corners)
-                    Corners.Add(new ObservablePoint(p.X, p.Y));
-
-                StartPoint.X = dto.StartPoint.X;
-                StartPoint.Y = dto.StartPoint.Y;
-
-                NumberOfSimulations = dto.NumberOfSimulations;
-                Thickness = dto.Thickness;
-                SelectedColor = AvailableColors.FirstOrDefault(c => c.Name == dto.ColorName) ?? AvailableColors[0];
-
-                Rules.Clear();
-                foreach (var r in dto.Rules)
-                {
-                    Rules.Add(new DirectionRule
-                    {
-                        IsEnabled = r.IsEnabled,
-                        TargetType = Enum.TryParse<DirectionTargetType>(r.TargetType, out var tt) ? tt : DirectionTargetType.Corners,
-                        N = r.N,
-                        Step = r.Step,
-                        Weight = r.Weight
-                    });
-                }
-
-                ClearBitmap();
-                StatusText = $"Loaded configuration from {Path.GetFileName(dlg.FileName)}.";
+                if (ApplyConfiguration(dto))
+                    StatusText = $"Loaded configuration from {Path.GetFileName(dlg.FileName)}.";
             }
             catch (Exception ex)
             {
                 StatusText = $"Load failed: {ex.Message}";
             }
+        }
+
+        private bool ApplyConfiguration(ChaosConfiguration dto)
+        {
+            if (dto.Corners.Count < 3)
+            {
+                StatusText = "Load failed: configuration has fewer than 3 corners.";
+                return false;
+            }
+
+            SetFigureTypeSilently(Enum.TryParse<FigureType>(dto.FigureType, out var ft) ? ft : FigureType.Custom);
+
+            Corners.Clear();
+            foreach (var p in dto.Corners)
+                Corners.Add(new ObservablePoint(p.X, p.Y));
+
+            StartPoint.X = dto.StartPoint.X;
+            StartPoint.Y = dto.StartPoint.Y;
+
+            NumberOfSimulations = dto.NumberOfSimulations;
+            Thickness = dto.Thickness;
+            SelectedColor = AvailableColors.FirstOrDefault(c => c.Name == dto.ColorName) ?? AvailableColors[0];
+
+            Rules.Clear();
+            foreach (var r in dto.Rules)
+            {
+                Rules.Add(new DirectionRule
+                {
+                    IsEnabled = r.IsEnabled,
+                    TargetType = Enum.TryParse<DirectionTargetType>(r.TargetType, out var tt) ? tt : DirectionTargetType.Corners,
+                    N = r.N,
+                    Step = r.Step,
+                    Weight = r.Weight
+                });
+            }
+
+            ClearBitmap();
+            return true;
         }
 
         // Replaces the current corners with a regular n-gon (same corner count), centered
@@ -328,6 +418,9 @@ namespace ChaosOrder.ViewModels
                 Corners[i].Y = newPts[i].Y;
             }
 
+            StartPoint.X = canvasCenter.X;
+            StartPoint.Y = canvasCenter.Y;
+
             SetFigureTypeSilently(n switch
             {
                 3 => FigureType.Triangle,
@@ -337,6 +430,7 @@ namespace ChaosOrder.ViewModels
                 _ => FigureType.Custom
             });
 
+            ZoomResetRequested?.Invoke(this, EventArgs.Empty);
             StatusText = $"Converted to a regular {n}-gon.";
         }
 

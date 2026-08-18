@@ -27,4 +27,13 @@ namespace ChaosOrder.Models
         public string Step { get; set; } = "2";
         public double Weight { get; set; } = 1;
     }
+
+    // One row in the single-file configuration store: a saved configuration plus the
+    // short auto-generated label and timestamp shown in the "Saved configurations" list.
+    public class ConfigurationEntry
+    {
+        public string Name { get; set; } = "";
+        public DateTime SavedAt { get; set; }
+        public ChaosConfiguration Config { get; set; } = new();
+    }
 }

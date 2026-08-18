@@ -33,13 +33,6 @@
         <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,10,0">
             <StackPanel>
 
-                <GroupBox Header="Configuration File">
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="Save..." Command="{Binding SaveConfigurationCommand}" Width="150" Height="35"/>
-                        <Button Content="Load..." Command="{Binding LoadConfigurationCommand}" Width="150" Height="35" Margin="8,0,0,0"/>
-                    </StackPanel>
-                </GroupBox>
-
                 <GroupBox Header="Simulation">
                     <StackPanel>
                         <StackPanel Orientation="Horizontal">
@@ -70,7 +63,7 @@
                                 <DataGridTemplateColumn Width="40">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
-                                            <Button Content="x" Padding="4,0"
+                                            <Button Content="x" Padding="0,0" Margin="1" Width="22" Height="20" FontSize="13" FontWeight="DemiBold"
                                                     Command="{Binding DataContext.RemoveCornerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}"/>
                                         </DataTemplate>
@@ -168,6 +161,30 @@
                     </StackPanel>
                 </GroupBox>
 
+                <GroupBox Header="Configuration File">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Save" Command="{Binding SaveConfigurationCommand}" Width="150" Height="35"/>
+                            <Button Content="Load from File..." Command="{Binding LoadConfigurationCommand}" Width="150" Height="35" Margin="8,0,0,0"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Saved configurations:" Margin="0,10,0,4" FontSize="13"/>
+                        <ListBox ItemsSource="{Binding SavedConfigurations}" SelectedItem="{Binding SelectedConfiguration}"
+                                 MaxHeight="160">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Name}"/>
+                                        <TextBlock Text="{Binding SavedAt, StringFormat=' ({0:g})'}" Foreground="Gray" FontSize="11"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <Button Content="Load Selected" Command="{Binding LoadSelectedConfigurationCommand}"
+                                Width="150" Height="35" Margin="0,8,0,0" HorizontalAlignment="Left"/>
+                    </StackPanel>
+                </GroupBox>
+
             </StackPanel>
         </ScrollViewer>
 
@@ -175,11 +192,12 @@
         <Border Grid.Column="1" BorderBrush="Gray" BorderThickness="1" Background="White"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 Width="{x:Static vm:MainViewModel.CanvasSize}" Height="{x:Static vm:MainViewModel.CanvasSize}"
-                RenderTransformOrigin="0.5,0.5" PreviewMouseWheel="DrawingCanvas_PreviewMouseWheel">
-            <Border.RenderTransform>
-                <ScaleTransform x:Name="DrawingScaleTransform" ScaleX="1" ScaleY="1"/>
-            </Border.RenderTransform>
-            <Grid Width="{x:Static vm:MainViewModel.CanvasSize}" Height="{x:Static vm:MainViewModel.CanvasSize}" ClipToBounds="True">
+                ClipToBounds="True" PreviewMouseWheel="DrawingCanvas_PreviewMouseWheel">
+            <Grid Width="{x:Static vm:MainViewModel.CanvasSize}" Height="{x:Static vm:MainViewModel.CanvasSize}"
+                  ClipToBounds="True" RenderTransformOrigin="0.5,0.5">
+                <Grid.RenderTransform>
+                    <ScaleTransform x:Name="DrawingScaleTransform" ScaleX="1" ScaleY="1"/>
+                </Grid.RenderTransform>
 
                 <Image Source="{Binding SimulationBitmap}" Stretch="None"
                        Width="{x:Static vm:MainViewModel.CanvasSize}" Height="{x:Static vm:MainViewModel.CanvasSize}"/>

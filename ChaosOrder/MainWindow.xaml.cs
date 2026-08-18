@@ -14,6 +14,13 @@ namespace ChaosOrder
         public MainWindow()
         {
             InitializeComponent();
+
+            if (DataContext is MainViewModel vm)
+                vm.ZoomResetRequested += (_, __) =>
+                {
+                    DrawingScaleTransform.ScaleX = 1;
+                    DrawingScaleTransform.ScaleY = 1;
+                };
         }
 
         private void DrawingCanvas_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
